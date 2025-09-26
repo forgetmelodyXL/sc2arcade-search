@@ -1,0 +1,1 @@
+# koishi-plugin-sc2arcade-search
