@@ -6,10 +6,12 @@ export const name = 'sc2arcade-search'
 
 export interface Config {
   proxyAgent: string
+  sensitiveword: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
-  proxyAgent: Schema.string().description('代理服务器地址')
+  proxyAgent: Schema.string().description('代理服务器地址'),
+  sensitiveword: Schema.boolean().description('是否启用敏感词过滤功能').default(true),
 })
 
 export const inject = {
@@ -20,7 +22,7 @@ declare module 'koishi' {
   interface Tables {
     sc2arcade_player: player
     sc2arcade_map: map
-    sc2arcade_sensitive_names: sensitiveName // 新增敏感词表
+    sc2arcade_sensitiveword: sensitiveName // 新增敏感词表
   }
 }
 
@@ -71,7 +73,7 @@ export function apply(ctx: Context, config: Config) {
   })
 
   // 添加敏感词数据表
-  ctx.model.extend('sc2arcade_sensitive_names', {
+  ctx.model.extend('sc2arcade_sensitiveword', {
     name: 'string',
     isSensitive: 'boolean',
     lastdate: 'timestamp',
@@ -578,6 +580,22 @@ export function apply(ctx: Context, config: Config) {
       }
     });
 
+  // 创建测试指令
+  ctx.command('sc2arcade/sensitive <text>', '检测文本是否包含敏感词', { authority: 3 })
+    .action(async ({ session }, text) => {
+      if (!text) return '请输入要检测的文本内容'
+
+      // 调用检测函数
+      const isSensitive = await checkSensitiveWord(ctx, config, text)
+
+      // 返回结果
+      if (isSensitive) {
+        return `检测结果: ❌ 包含敏感词\n文本: ${text}`
+      } else {
+        return `检测结果: ✅ 无敏感词\n文本: ${text}`
+      }
+    })
+
 }
 
 function profilesMatches(session: any, response: any) {
@@ -660,33 +678,32 @@ async function makeHttpRequest(ctx: Context, url: string, proxyAgent?: string) {
 
 // 封装敏感词查询为一个独立的函数
 async function checkSensitiveWord(ctx: Context, config: Config, content: string): Promise<boolean> {
-  const CACHE_EXPIRY_DAYS = 7;
-  const expiryTime = CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+  // 如果禁用敏感词检测，直接返回 false
+  if (!config.sensitiveword) {
+    return false
+  }
 
   // 优先检查数据库缓存
-  const [record] = await ctx.database.get('sc2arcade_sensitive_names', { name: content });
+  const [record] = await ctx.database.get('sc2arcade_sensitiveword', { name: content });
 
+  // 如果存在缓存记录，直接返回缓存结果（不再检查时间）
   if (record) {
-    const now = Date.now();
-    const recordDate = new Date(record.lastdate).getTime();
-    if (now - recordDate <= expiryTime) {
-      return record.isSensitive;
-    }
+    return record.isSensitive;
   }
 
   try {
-    // 调用敏感词检查 API
-    const response = await ctx.http.get(
-      `https://v.api.aa1.cn/api/api-mgc/index.php?msg=${encodeURIComponent(content)}`,
-      { proxyAgent: config.proxyAgent }
+    // 调用新的敏感词检查 API (POST)
+    const response = await ctx.http.post(
+      'https://uapis.cn/api/v1/text/profanitycheck',
+      { text: content }, // 直接使用原始文本，不需要encodeURIComponent
     );
 
     // 解析 API 响应
-    const isSensitive = response.code === 200 &&
-      (response.num === '1' || response.desc.includes('存在敏感词'));
+    const isSensitive = response.status === "forbidden";
 
-    // 更新数据库缓存
-    await ctx.database.upsert('sc2arcade_sensitive_names', [{
+    // 将结果存入数据库缓存（首次存储）
+    await ctx.database.upsert('sc2arcade_sensitiveword', [{
       name: content,
       isSensitive,
       lastdate: new Date(),
@@ -694,8 +711,9 @@ async function checkSensitiveWord(ctx: Context, config: Config, content: string)
 
     return isSensitive;
   } catch (error) {
-    console.error('敏感词检查失败, 使用缓存或默认值:', error);
-    return record?.isSensitive || false;
+    console.error('敏感词检查失败:', error);
+    // 出错时返回安全值（认为有敏感词）
+    return true;
   }
 }
 

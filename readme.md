@@ -92,6 +92,10 @@ proxyAgent: 'http://your-proxy-server:port' // 代理服务器地址（为空则
 <details>
 <summary>点我查看更新日志详情</summary>
 
+### ✨ 1.1.21
+  - 使用新的敏感词检测API，提高检测率
+  - 新增一个配置项
+
 ### ✨ 1.1.20
   - 优化数据库表
 
