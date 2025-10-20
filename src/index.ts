@@ -28,11 +28,13 @@ declare module 'koishi' {
 
 // 这里是新增表的接口类型
 export interface player {
+  id: number // 新增自增主键
   userId: string
   regionId: number
   realmId: number
   profileId: number
   createdAt: Date
+  isActive: boolean // 新增字段，标记当前使用的句柄
 }
 
 export interface map {
@@ -54,13 +56,16 @@ export function apply(ctx: Context, config: Config) {
 
   ctx.model.extend('sc2arcade_player', {
     // 各字段的类型声明
+    id: 'unsigned', // 新增自增主键
     userId: 'string',
     regionId: 'unsigned',
     realmId: 'unsigned',
     profileId: 'unsigned',
     createdAt: 'timestamp',
+    isActive: 'boolean', // 新增字段
   }, {
-    primary: 'userId'
+    autoInc: true, // 启用自增主键
+    primary: 'id' // 设置主键为 id
   })
 
   ctx.model.extend('sc2arcade_map', {
@@ -80,6 +85,24 @@ export function apply(ctx: Context, config: Config) {
   }, {
     primary: 'name' // 使用name作为主键
   })
+
+  // 辅助函数：获取区域名称
+  function getRegionName(regionId: number): string {
+    const regionMap = {
+      1: '[US]',
+      2: '[EU]',
+      3: '[KR]',
+      5: '[CN]'
+    }
+    return regionMap[regionId] || `[${regionId}]`
+  }
+
+  // 辅助函数：格式化句柄显示
+  function formatHandle(handle: player, isActive = false): string {
+    const region = getRegionName(handle.regionId)
+    const activeMark = isActive ? ' (当前使用)' : ''
+    return `${region} ${handle.regionId}-S2-${handle.realmId}-${handle.profileId}${activeMark}`
+  }
 
   ctx.guild()
     .command('sc2arcade/房间', '查询本群绑定的游戏大厅地图正在等待中的房间')
@@ -160,6 +183,7 @@ export function apply(ctx: Context, config: Config) {
       }
     });
 
+  // 修改大厅指令
   ctx.command('sc2arcade/大厅 [regionId]', '查询指定区域正在等待中的房间')
     .action(async (argv, regionId) => {
       const session = argv.session;
@@ -175,10 +199,16 @@ export function apply(ctx: Context, config: Config) {
         return `<quote id="${session.messageId}"/>❌ 区域ID错误, 请重新输入。\n(可用的区域ID: US, EU, KR, CN)`;
       }
 
-
-      // 映射区域ID到区域代码
-      const regionCodeMap = { US: 1, EU: 2, KR: 3, CN: 5 };
-      const regionCode = regionCodeMap[regionId.toUpperCase()];
+      // 映射区域ID到区域代码和名称
+      const regionCodeMap = {
+        US: { code: 1, name: '[US]' },
+        EU: { code: 2, name: '[EU]' },
+        KR: { code: 3, name: '[KR]' },
+        CN: { code: 5, name: '[CN]' }
+      };
+      const regionInfo = regionCodeMap[regionId.toUpperCase()];
+      const regionCode = regionInfo.code;
+      const regionName = regionInfo.name;
 
       try {
         const response = await makeHttpRequest(
@@ -187,48 +217,105 @@ export function apply(ctx: Context, config: Config) {
           config.proxyAgent
         );
 
-        return await lobbiesActive(response);
+        return `<quote id="${session.messageId}"/>` + lobbiesActive(response, regionName);
       } catch (error) {
         console.error('查询大厅信息时发生错误:', error);
         return '⚠️ 服务器繁忙, 请稍后尝试。';
       }
     });
 
+  // 修改后的句柄查询指令
   ctx.command('sc2arcade/句柄 [user]', '查询用户绑定的游戏句柄')
     .usage('user 参数为选填项')
     .example('/句柄, 查询自己绑定的游戏句柄\n    /句柄 @用户, 查询其他用户绑定的游戏句柄')
     .action(async (argv, user) => {
-      const session = argv.session; // 获取 Session 对象
+      const session = argv.session;
       try {
         if (!user) {
-          const [profile] = await ctx.database.get('sc2arcade_player', { userId: session.userId });
+          // 获取完整记录，而不是只选择部分字段
+          const handles = await ctx.database.get('sc2arcade_player', { userId: session.userId });
 
-          if (!profile) {
+          if (!handles || handles.length === 0) {
             return `<quote id="${session.messageId}"/>您暂未绑定游戏句柄。`;
           }
 
-          const { regionId, realmId, profileId } = profile;
-          return `<quote id="${session.messageId}"/>您绑定的游戏句柄为 ${regionId}-S2-${realmId}-${profileId}`;
+          const message = handles.map((h, index) =>
+            `${index + 1}. ${formatHandle(h, h.isActive)}`
+          ).join('\n');
+
+          return `<quote id="${session.messageId}"/>您绑定的游戏句柄：\n${message}`;
         } else {
           const parsedUser = h.parse(user)[0];
           if (!parsedUser || parsedUser.type !== 'at' || !parsedUser.attrs.id) {
             return `<quote id="${session.messageId}"/>❌ 参数错误, 请输入"句柄 @用户"查询其他用户绑定的游戏句柄。`
           }
           const targetUserId = parsedUser.attrs.id;
+          // 获取完整记录，而不是只选择部分字段
+          const handles = await ctx.database.get('sc2arcade_player', { userId: targetUserId });
 
-          const [profile] = await ctx.database.get('sc2arcade_player', { userId: targetUserId });
-
-          if (!profile) {
+          if (!handles || handles.length === 0) {
             return `<quote id="${session.messageId}"/>对方暂未绑定游戏句柄。`;
           }
 
-          const { regionId, realmId, profileId } = profile;
-          return `<quote id="${session.messageId}"/>对方绑定的游戏句柄为 ${regionId}-S2-${realmId}-${profileId}`;
-        }
+          const message = handles.map((h, index) =>
+            `${index + 1}. ${formatHandle(h, h.isActive)}`
+          ).join('\n');
 
+          return `<quote id="${session.messageId}"/>对方绑定的游戏句柄：\n${message}`;
+        }
       } catch (error) {
         console.error('查询句柄信息时发生错误:', error);
         return '⚠️ 服务器繁忙, 请稍后尝试。';
+      }
+    });
+
+  // 新增切换句柄指令
+  ctx.command('sc2arcade/切换 [index]', '切换当前使用的游戏句柄')
+    .action(async (argv, indexParam) => { // 将参数名改为 indexParam 避免混淆
+      const session = argv.session;
+      try {
+        const handles = await ctx.database.get('sc2arcade_player', { userId: session.userId });
+
+        if (!handles || handles.length === 0) {
+          return `<quote id="${session.messageId}"/>您暂未绑定游戏句柄。`;
+        }
+
+        let index: number | null = null;
+
+        if (!indexParam) {
+          // 显示所有句柄让用户选择
+          const message = handles.map((h, i) =>
+            `${i + 1}. ${formatHandle(h, h.isActive)}`
+          ).join('\n');
+
+          await session.send(`<quote id="${session.messageId}"/>请选择要切换的句柄：\n${message}\n\n回复序号进行切换`);
+
+          const choice = await session.prompt(30000);
+          if (!choice) return `<quote id="${session.messageId}"/>已取消操作。`;
+
+          // 将用户输入的字符串转换为数字
+          index = parseInt(choice);
+        } else {
+          // 将参数转换为数字
+          index = parseInt(indexParam);
+        }
+
+        // 检查转换后的值是否有效
+        if (isNaN(index) || index < 1 || index > handles.length) {
+          return `<quote id="${session.messageId}"/>❌ 序号无效，请输入1-${handles.length}之间的数字。`;
+        }
+
+        const selectedHandle = handles[index - 1];
+
+        // 更新所有句柄状态
+        await Promise.all(handles.map(handle =>
+          ctx.database.set('sc2arcade_player', { id: handle.id }, { isActive: handle.id === selectedHandle.id })
+        ));
+
+        return `<quote id="${session.messageId}"/>✅ 已切换到句柄：${formatHandle(selectedHandle)}`;
+      } catch (error) {
+        console.error('切换句柄时发生错误:', error);
+        return '⚠️ 切换失败，请稍后尝试。';
       }
     });
 
@@ -270,19 +357,24 @@ export function apply(ctx: Context, config: Config) {
       }
     });
 
+  // 修改战绩指令使用当前活跃句柄
   ctx.command('sc2arcade/战绩 [user]', '查询用户的游戏战绩')
     .usage('user 参数为选填项')
     .example('/战绩, 查询自己的游戏战绩\n    /战绩 @用户, 查询其他用户的游戏战绩')
     .action(async (argv, user) => {
-      const session = argv.session; // 获取Session对象
-      let regionId, realmId, profileId;
+      const session = argv.session;
       try {
         if (!user) {
-          const [profile] = await ctx.database.get('sc2arcade_player', { userId: session.userId });
-          if (!profile) {
-            return `<quote id="${session.messageId}"/>您暂未绑定游戏句柄。`;
+          const activeHandle = await ctx.database.get('sc2arcade_player', {
+            userId: session.userId,
+            isActive: true
+          });
+
+          if (!activeHandle || activeHandle.length === 0) {
+            return `<quote id="${session.messageId}"/>您暂未绑定游戏句柄或未设置活跃句柄。`;
           }
-          ({ regionId, realmId, profileId } = profile);
+
+          const { regionId, realmId, profileId } = activeHandle[0];
           const response = await makeHttpRequest(
             ctx,
             `https://api.sc2arcade.com/profiles/${regionId}/${realmId}/${profileId}/matches?orderDirection=desc`,
@@ -297,11 +389,16 @@ export function apply(ctx: Context, config: Config) {
             return `<quote id="${session.messageId}"/>❌ 参数错误, 请输入"战绩 @用户"查询其他用户的游戏战绩。`
           }
           const targetUserId = parsedUser.attrs.id;
-          const [profile] = await ctx.database.get('sc2arcade_player', { userId: targetUserId });
-          if (!profile) {
-            return `<quote id="${session.messageId}"/>对方暂未绑定游戏句柄。`;
+          const activeHandle = await ctx.database.get('sc2arcade_player', {
+            userId: targetUserId,
+            isActive: true
+          });
+
+          if (!activeHandle || activeHandle.length === 0) {
+            return `<quote id="${session.messageId}"/>对方暂未绑定游戏句柄或未设置活跃句柄。`;
           }
-          ({ regionId, realmId, profileId } = profile);
+
+          const { regionId, realmId, profileId } = activeHandle[0];
           const response = await makeHttpRequest(
             ctx,
             `https://api.sc2arcade.com/profiles/${regionId}/${realmId}/${profileId}/matches?orderDirection=desc`,
@@ -317,45 +414,55 @@ export function apply(ctx: Context, config: Config) {
       }
     });
 
-  ctx.command('sc2arcade/场数 [user]', '查询用户游玩的所有地图的​​累计场数排行榜')
+  // 修改场数指令使用当前活跃句柄
+  ctx.command('sc2arcade/场数 [user]', '查询用户游玩的所有地图的累计场数排行榜')
     .alias('场次')
     .usage('user 参数为选填项')
-    .example('/场数, 查询自己游玩的所有地图的​​累计场数排行榜\n    /场数 @用户, 查询其他用户游玩的所有地图的​​累计场数排行榜')
+    .example('/场数, 查询自己游玩的所有地图的累计场数排行榜\n    /场数 @用户, 查询其他用户游玩的所有地图的累计场数排行榜')
     .action(async (argv, user) => {
-      const session = argv.session; // 获取Session对象
-      let regionId, realmId, profileId;
+      const session = argv.session;
       try {
         if (!user) {
-          const [profile] = await ctx.database.get('sc2arcade_player', { userId: session.userId });
-          if (!profile) {
-            return `<quote id="${session.messageId}"/>您暂未绑定游戏句柄。`;
+          const activeHandle = await ctx.database.get('sc2arcade_player', {
+            userId: session.userId,
+            isActive: true
+          });
+
+          if (!activeHandle || activeHandle.length === 0) {
+            return `<quote id="${session.messageId}"/>您暂未绑定游戏句柄或未设置活跃句柄。`;
           }
-          ({ regionId, realmId, profileId } = profile);
+
+          const { regionId, realmId, profileId } = activeHandle[0];
           const response = await makeHttpRequest(
             ctx,
             `https://api.sc2arcade.com/profiles/${regionId}/${realmId}/${profileId}/most-played`,
             config.proxyAgent
           );
           const history = profilesMostPlayed(session, response);
-          return history && history.length > 0 ? history : `<quote id="${session.messageId}"/>📭 该游戏账号没有可查询的​​场数。`;
+          return history && history.length > 0 ? history : `<quote id="${session.messageId}"/>📭 该游戏账号没有可查询的场数。`;
         } else {
           const parsedUser = h.parse(user)[0];
           if (!parsedUser || parsedUser.type !== 'at' || !parsedUser.attrs.id) {
-            return `<quote id="${session.messageId}"/>❌ 参数错误, 请输入"场数 @用户"查询其他用户游玩的所有地图的​​累计场数排行榜。`
+            return `<quote id="${session.messageId}"/>❌ 参数错误, 请输入"场数 @用户"查询其他用户游玩的所有地图的累计场数排行榜。`
           }
           const targetUserId = parsedUser.attrs.id;
-          const [profile] = await ctx.database.get('sc2arcade_player', { userId: targetUserId });
-          if (!profile) {
-            return `<quote id="${session.messageId}"/>对方暂未绑定游戏句柄。`;
+          const activeHandle = await ctx.database.get('sc2arcade_player', {
+            userId: targetUserId,
+            isActive: true
+          });
+
+          if (!activeHandle || activeHandle.length === 0) {
+            return `<quote id="${session.messageId}"/>对方暂未绑定游戏句柄或未设置活跃句柄。`;
           }
-          ({ regionId, realmId, profileId } = profile);
+
+          const { regionId, realmId, profileId } = activeHandle[0];
           const response = await makeHttpRequest(
             ctx,
             `https://api.sc2arcade.com/profiles/${regionId}/${realmId}/${profileId}/most-played`,
             config.proxyAgent
           );
           const history = profilesMostPlayed(session, response);
-          return history && history.length > 0 ? history : `<quote id="${session.messageId}"/>📭 该游戏账号没有可查询的​​场数。`;
+          return history && history.length > 0 ? history : `<quote id="${session.messageId}"/>📭 该游戏账号没有可查询的场数。`;
         }
       } catch (error) {
         console.error('查询游戏场数失败:', error);
@@ -363,48 +470,63 @@ export function apply(ctx: Context, config: Config) {
       }
     });
 
+  // 修改后的绑定指令
   ctx.command('sc2arcade/绑定 [handle]', '绑定游戏句柄')
     .alias('绑定句柄')
     .usage('游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID]')
     .action(async (argv, handle) => {
-      const session = argv.session; // 获取 Session 对象
-      // 检查用户是否已绑定
-      const existingRecord = await ctx.database.get('sc2arcade_player', { userId: session.userId });
-      if (Object.keys(existingRecord).length > 0) {
-        return `<quote id="${session.messageId}"/>您已经绑定了游戏句柄, 无需再次绑定。`;
-      }
+      const session = argv.session;
       if (!handle) {
-        await session.send(`<quote id="${session.messageId}"/>请在30秒内输入游戏句柄:\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])`)
+        // 添加示例句柄
+        await session.send(`<quote id="${session.messageId}"/>请在30秒内输入游戏句柄:\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])\n例如：1-S2-1-123456`)
 
         handle = await session.prompt(30000)
         if (!handle) return `<quote id="${session.messageId}"/>已取消操作, 请重新输入。`
       }
 
-      // 验证handle格式
-      const handleRegex = /^([1235])-S2-([12])-(\d+)$/;
+      // 验证handle格式 - 修改正则表达式支持大小写不敏感的S2
+      const handleRegex = /^([1235])-s2-([12])-(\d+)$/i; // 使用/i标志忽略大小写
       if (!handleRegex.test(handle)) {
-        return `<quote id="${session.messageId}"/>❌ 游戏句柄格式错误, 请重新输入。\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])`;
+        return `<quote id="${session.messageId}"/>❌ 游戏句柄格式错误, 请重新输入。\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])\n例如：1-S2-1-123456`;
       }
 
-      const [, regionId, realmId, profileId] = handle.match(handleRegex)!.map(Number);
+      // 将句柄转换为标准格式（大写S2）
+      const standardizedHandle = handle.replace(/-s2-/i, '-S2-');
+      const [, regionId, realmId, profileId] = standardizedHandle.match(handleRegex)!.map(Number);
 
-      // 新增检查：检测是否已被其他用户绑定
+      // 检查是否已被其他用户绑定
       const existingHandle = await ctx.database.get('sc2arcade_player', {
         regionId,
         realmId,
         profileId
       });
+
       if (existingHandle.length > 0) {
-        return `<quote id="${session.messageId}"/>❌ 绑定失败, 该游戏句柄已被 ${existingHandle[0].userId} 绑定。`;
+        return `<quote id="${session.messageId}"/>❌ 绑定失败, 该游戏句柄已被其他用户绑定。`;
+      }
+
+      // 检查是否已被当前用户绑定
+      const userHandles = await ctx.database.get('sc2arcade_player', { userId: session.userId });
+      const alreadyBound = userHandles.some(h =>
+        h.regionId === regionId &&
+        h.realmId === realmId &&
+        h.profileId === profileId
+      );
+
+      if (alreadyBound) {
+        return `<quote id="${session.messageId}"/>❌ 您已绑定过该游戏句柄。`;
       }
 
       try {
         // 查询句柄信息
-        const response = await makeHttpRequest(
+        await makeHttpRequest(
           ctx,
           `https://api.sc2arcade.com/profiles/${regionId}/${realmId}/${profileId}`,
           config.proxyAgent
         );
+
+        // 判断是否是第一个句柄
+        const isFirstHandle = userHandles.length === 0;
 
         // 执行绑定操作
         await ctx.database.create('sc2arcade_player', {
@@ -412,13 +534,12 @@ export function apply(ctx: Context, config: Config) {
           regionId,
           realmId,
           profileId,
+          isActive: isFirstHandle, // 如果是第一个句柄，设为活跃
           createdAt: new Date()
         });
 
-        return `<quote id="${session.messageId}"/>✅ 您已经成功绑定到该游戏句柄。`;
-
+        return `<quote id="${session.messageId}"/>✅ 您已成功绑定游戏句柄${isFirstHandle ? '并设为当前使用' : ''}。`;
       } catch (error) {
-        // 如果请求本身失败（比如网络问题），会进入catch块
         if (error.response && error.response.status === 404) {
           return `<quote id="${session.messageId}"/>❌ 绑定失败, 您尝试绑定的游戏句柄不存在。`;
         }
@@ -427,72 +548,60 @@ export function apply(ctx: Context, config: Config) {
       }
     });
 
-  ctx.command('sc2arcade/解绑', '解绑游戏句柄')
+  // 修改后的解绑指令
+  ctx.command('sc2arcade/解绑 [index]', '解绑游戏句柄')
     .alias('解绑句柄')
-    .action(async (argv) => {
-      const session = argv.session; // 获取 Session 对象
-
+    .action(async (argv, indexParam) => { // 将参数名改为 indexParam
+      const session = argv.session;
       try {
-        // 检查并删除绑定
-        const existingRecord = await ctx.database.get('sc2arcade_player', { userId: session.userId });
-        if (Object.keys(existingRecord).length < 1) {
+        const handles = await ctx.database.get('sc2arcade_player', { userId: session.userId });
+
+        if (handles.length === 0) {
           return `<quote id="${session.messageId}"/>您暂未绑定游戏句柄。`;
         }
-        await ctx.database.remove('sc2arcade_player', { userId: session.userId });
-        return `<quote id="${session.messageId}"/>✅ 您已成功解绑游戏句柄。`;
-      } catch (error) {
-        console.error('解绑失败:', error);
-        return '⚠️ 服务器繁忙, 请稍后尝试。';
-      }
-    });
 
-  ctx.guild()
-    .command('sc2arcade/绑定地图 [url]', '绑定游戏大厅地图', { authority: 3 })
-    .usage('地图URL格式为: https://sc2arcade.com/map/[区域ID]/[地图ID]/')
-    .action(async (argv, url) => {
-      const session = argv.session;
+        let index: number | null = null;
 
-      const existingRecord = await ctx.database.get('sc2arcade_map', { guildId: session.guildId });
-      if (Object.keys(existingRecord).length > 0) {
-        return `<quote id="${session.messageId}"/>本群已经绑定了游戏大厅地图, 无需再次绑定。`;
-      }
+        if (!indexParam) {
+          // 显示所有句柄让用户选择
+          const message = handles.map((h, i) =>
+            `${i + 1}. ${formatHandle(h, h.isActive)}`
+          ).join('\n');
 
-      if (!url) {
-        await session.send(`<quote id="${session.messageId}"/>请在30秒内输入游戏大厅的地图URL:\n(地图URL格式为: https://sc2arcade.com/map/[区域ID]/[地图ID]/)`)
+          await session.send(`<quote id="${session.messageId}"/>请选择要解绑的句柄：\n${message}\n\n回复序号进行解绑`);
 
-        url = await session.prompt(30000)
-        if (!url) return `<quote id="${session.messageId}"/>已取消操作, 请重新输入。`
-      }
+          const choice = await session.prompt(30000);
+          if (!choice) return `<quote id="${session.messageId}"/>已取消操作。`;
 
-      const regex = /^https:\/\/sc2arcade\.com\/map\/(\d)\/(\d+)\/$/;
-      const [, regionId, mapId] = url.match(regex)?.map(Number) || [];
-
-      if (!regionId || !mapId) {
-        return `<quote id="${session.messageId}"/>❌ 地图URL格式错误, 请重新输入。\n(地图URL格式为: https://sc2arcade.com/map/[区域ID]/[地图ID]/)`;
-      }
-
-      try {
-        await makeHttpRequest(
-          ctx,
-          `https://api.sc2arcade.com/maps/${regionId}/${mapId}`,
-          config.proxyAgent
-        );
-
-        await ctx.database.create('sc2arcade_map', {
-          guildId: session.guildId,
-          regionId,
-          mapId,
-          createdAt: new Date()
-        });
-
-        return `<quote id="${session.messageId}"/>✅ 本群已成功绑定到该游戏大厅地图。`;
-      } catch (error) {
-        // 处理404错误（兼容不同HTTP客户端实现）
-        if (error.response?.status === 404) {
-          return `<quote id="${session.messageId}"/>❌ 绑定失败, 本群尝试绑定的游戏大厅地图不存在。`;
+          index = parseInt(choice);
+        } else {
+          index = parseInt(indexParam);
         }
 
-        console.error('地图绑定失败:', error);
+        // 检查转换后的值是否有效
+        if (isNaN(index) || index < 1 || index > handles.length) {
+          return `<quote id="${session.messageId}"/>❌ 序号无效，请输入1-${handles.length}之间的数字。`;
+        }
+
+        const handleToRemove = handles[index - 1];
+        const wasActive = handleToRemove.isActive;
+
+        // 删除句柄
+        await ctx.database.remove('sc2arcade_player', { id: handleToRemove.id });
+
+        // 如果解绑的是活跃句柄且还有其他句柄
+        if (wasActive && handles.length > 1) {
+          // 找到下一个句柄设为活跃
+          const nextHandle = handles.find(h => h.id !== handleToRemove.id);
+          if (nextHandle) {
+            await ctx.database.set('sc2arcade_player', { id: nextHandle.id }, { isActive: true });
+            return `<quote id="${session.messageId}"/>✅ 已解绑句柄，并自动切换到：${formatHandle(nextHandle)}`;
+          }
+        }
+
+        return `<quote id="${session.messageId}"/>✅ 已成功解绑句柄。`;
+      } catch (error) {
+        console.error('解绑失败:', error);
         return '⚠️ 服务器繁忙, 请稍后尝试。';
       }
     });
@@ -658,16 +767,19 @@ function mapsplayerbase(response) {
   return topPlayers;
 }
 
-function lobbiesActive(response: any) {
+// 修改 lobbiesActive 函数
+function lobbiesActive(response: any, regionName: string) {
   const data = response.data;
 
-  // 如果数据为空数组，返回'大厅无房间'
-  if (!data.length) return '🚪 当前游戏大厅暂无房间。';
+  // 如果数据为空数组，返回特定服务器名称的提示
+  if (!data.length) return `🚪 当前${regionName}游戏大厅暂无房间。`;
 
   // 限制数据条数，格式化并连接数据
-  return data.slice(0, 20).map((item, index) =>
+  const roomList = data.slice(0, 20).map((item, index) =>
     `${index + 1}. 地图: ${item.map.name}, 人数: ${item.slotsHumansTaken}/${item.slotsHumansTotal}`
   ).join('\n');
+
+  return `${regionName}游戏大厅房间列表：\n${roomList}`;
 }
 
 // 封装 HTTP 请求函数
