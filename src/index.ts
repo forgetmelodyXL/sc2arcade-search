@@ -105,7 +105,7 @@ export function apply(ctx: Context, config: Config) {
   }
 
   ctx.guild()
-    .command('sc2arcade/房间', '查询本群绑定的游戏大厅地图正在等待中的房间')
+    .command('sc2arcade/房间', '查询正在等待的房间')
     .action(async (argv) => {
       try {
         const session = argv.session;
@@ -131,7 +131,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   ctx.guild()
-    .command('sc2arcade/历史房间', '查询本群绑定的游戏大厅地图已经开始的房间')
+    .command('sc2arcade/历史房间', '查询已经开始的房间')
     .action(async (argv) => {
       try {
         const session = argv.session;
@@ -157,7 +157,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   ctx.guild()
-    .command('sc2arcade/场数排行', '查询本群绑定的游戏大厅地图的玩家总场数排行榜')
+    .command('sc2arcade/场数排行', '查询游玩地图的场数排行榜')
     .alias('场次排行')
     .action(async (argv) => {
       try {
@@ -184,7 +184,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   // 修改大厅指令
-  ctx.command('sc2arcade/大厅 [regionId]', '查询指定区域正在等待中的房间')
+  ctx.command('sc2arcade/大厅 [regionId]', '查询大厅中正在等待的房间')
     .action(async (argv, regionId) => {
       const session = argv.session;
       if (!regionId) {
@@ -225,7 +225,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   // 修改后的句柄查询指令
-  ctx.command('sc2arcade/句柄 [user]', '查询用户绑定的游戏句柄')
+  ctx.command('sc2arcade/句柄 [user]', '查询已经绑定的星际争霸2游戏句柄')
     .usage('user 参数为选填项')
     .example('/句柄, 查询自己绑定的游戏句柄\n    /句柄 @用户, 查询其他用户绑定的游戏句柄')
     .action(async (argv, user) => {
@@ -319,7 +319,7 @@ export function apply(ctx: Context, config: Config) {
       }
     });
 
-  ctx.command('sc2arcade/查询 [handle]', '查询游戏句柄是否被用户绑定')
+  ctx.command('sc2arcade/查询 [handle]', '查询星际争霸2游戏句柄是否被绑定')
     .action(async (argv, handle) => {
       const session = argv.session; // 获取 Session 对象
       try {
@@ -358,7 +358,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   // 修改战绩指令使用当前活跃句柄
-  ctx.command('sc2arcade/战绩 [user]', '查询用户的游戏战绩')
+  ctx.command('sc2arcade/战绩 [user]', '查询近20场的游戏战绩')
     .usage('user 参数为选填项')
     .example('/战绩, 查询自己的游戏战绩\n    /战绩 @用户, 查询其他用户的游戏战绩')
     .action(async (argv, user) => {
@@ -415,10 +415,10 @@ export function apply(ctx: Context, config: Config) {
     });
 
   // 修改场数指令使用当前活跃句柄
-  ctx.command('sc2arcade/场数 [user]', '查询用户游玩的所有地图的累计场数排行榜')
+  ctx.command('sc2arcade/场数 [user]', '查询游玩所有地图的场数')
     .alias('场次')
     .usage('user 参数为选填项')
-    .example('/场数, 查询自己游玩的所有地图的累计场数排行榜\n    /场数 @用户, 查询其他用户游玩的所有地图的累计场数排行榜')
+    .example('/场数, 查询自己游玩的所有地图的场数\n    /场数 @用户, 查询其他用户游玩的所有地图的场数')
     .action(async (argv, user) => {
       const session = argv.session;
       try {
@@ -471,7 +471,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   // 修改后的绑定指令
-  ctx.command('sc2arcade/绑定 [handle]', '绑定游戏句柄')
+  ctx.command('sc2arcade/绑定 [handle]', '绑定星际争霸2游戏句柄')
     .alias('绑定句柄')
     .usage('游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID]')
     .action(async (argv, handle) => {
@@ -549,7 +549,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   // 修改后的解绑指令
-  ctx.command('sc2arcade/解绑 [index]', '解绑游戏句柄')
+  ctx.command('sc2arcade/解绑 [index]', '解除绑定星际争霸2游戏句柄')
     .alias('解绑句柄')
     .action(async (argv, indexParam) => { // 将参数名改为 indexParam
       const session = argv.session;
@@ -834,7 +834,12 @@ async function lobbiesHistory(ctx: Context, config: Config, response, status: st
     .filter(room => room.status === status && room.slotsHumansTaken > 0)
     .slice(0, status === 'started' ? 5 : 20);
 
-  if (!rooms.length) return '🚪 当前游戏大厅暂无房间。';
+  // 根据状态返回不同的提示信息
+  if (!rooms.length) {
+    return status === 'started'
+      ? '🚪 当前地图暂无历史房间。'
+      : '🚪 当前地图暂无等待中的房间。';
+  }
 
   // 批量处理所有玩家名称
   const processSlots = async (slots) => {
