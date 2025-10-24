@@ -270,7 +270,7 @@ export function apply(ctx: Context, config: Config) {
     });
 
   // 新增切换句柄指令
-  ctx.command('sc2arcade/切换 [index]', '切换当前使用的游戏句柄')
+  ctx.command('sc2arcade/切换 [index]', '切换正在使用的游戏句柄')
     .action(async (argv, indexParam) => { // 将参数名改为 indexParam 避免混淆
       const session = argv.session;
       try {
@@ -478,7 +478,7 @@ export function apply(ctx: Context, config: Config) {
       const session = argv.session;
       if (!handle) {
         // 添加示例句柄
-        await session.send(`<quote id="${session.messageId}"/>请在30秒内输入游戏句柄:\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])\n例如：1-S2-1-123456`)
+        await session.send(`<quote id="${session.messageId}"/>请在30秒内输入游戏句柄:\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])\n例如：5-S2-1-1234567`)
 
         handle = await session.prompt(30000)
         if (!handle) return `<quote id="${session.messageId}"/>已取消操作, 请重新输入。`
@@ -487,7 +487,7 @@ export function apply(ctx: Context, config: Config) {
       // 验证handle格式 - 修改正则表达式支持大小写不敏感的S2
       const handleRegex = /^([1235])-s2-([12])-(\d+)$/i; // 使用/i标志忽略大小写
       if (!handleRegex.test(handle)) {
-        return `<quote id="${session.messageId}"/>❌ 游戏句柄格式错误, 请重新输入。\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])\n例如：1-S2-1-123456`;
+        return `<quote id="${session.messageId}"/>❌ 游戏句柄格式错误, 请重新输入。\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])\n例如：5-S2-1-1234567`;
       }
 
       // 将句柄转换为标准格式（大写S2）
