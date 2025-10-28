@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-sc2arcade-search",
   "description": "提供星际争霸2游戏大厅相关查询功能的 Koishi 插件，支持房间状态查询、战绩查询、地图绑定等功能。",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [

@@ -7,11 +7,13 @@ export const name = 'sc2arcade-search'
 export interface Config {
   proxyAgent: string
   sensitiveword: boolean
+  checkHandle: boolean  // 新增：是否开启绑定句柄检测
 }
 
 export const Config: Schema<Config> = Schema.object({
   proxyAgent: Schema.string().description('代理服务器地址'),
   sensitiveword: Schema.boolean().description('是否启用敏感词过滤功能').default(true),
+  checkHandle: Schema.boolean().description('是否开启绑定句柄检测').default(true),  // 新增配置项
 })
 
 export const inject = {
@@ -470,27 +472,23 @@ export function apply(ctx: Context, config: Config) {
       }
     });
 
-  // 修改后的绑定指令
+    // 修改后的绑定指令
   ctx.command('sc2arcade/绑定 [handle]', '绑定星际争霸2游戏句柄')
     .alias('绑定句柄')
     .usage('游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID]')
     .action(async (argv, handle) => {
       const session = argv.session;
       if (!handle) {
-        // 添加示例句柄
         await session.send(`<quote id="${session.messageId}"/>请在30秒内输入游戏句柄:\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])\n例如：5-S2-1-1234567`)
-
         handle = await session.prompt(30000)
         if (!handle) return `<quote id="${session.messageId}"/>已取消操作, 请重新输入。`
       }
 
-      // 验证handle格式 - 修改正则表达式支持大小写不敏感的S2
-      const handleRegex = /^([1235])-s2-([12])-(\d+)$/i; // 使用/i标志忽略大小写
+      const handleRegex = /^([1235])-s2-([12])-(\d+)$/i;
       if (!handleRegex.test(handle)) {
         return `<quote id="${session.messageId}"/>❌ 游戏句柄格式错误, 请重新输入。\n(游戏句柄格式为: [区域ID]-S2-[服务器ID]-[档案ID])\n例如：5-S2-1-1234567`;
       }
 
-      // 将句柄转换为标准格式（大写S2）
       const standardizedHandle = handle.replace(/-s2-/i, '-S2-');
       const [, regionId, realmId, profileId] = standardizedHandle.match(handleRegex)!.map(Number);
 
@@ -518,12 +516,15 @@ export function apply(ctx: Context, config: Config) {
       }
 
       try {
-        // 查询句柄信息
-        await makeHttpRequest(
-          ctx,
-          `https://api.sc2arcade.com/profiles/${regionId}/${realmId}/${profileId}`,
-          config.proxyAgent
-        );
+        // 根据配置决定是否进行句柄检测
+        if (config.checkHandle) {
+          // 查询句柄信息进行检测
+          await makeHttpRequest(
+            ctx,
+            `https://api.sc2arcade.com/profiles/${regionId}/${realmId}/${profileId}`,
+            config.proxyAgent
+          );
+        }
 
         // 判断是否是第一个句柄
         const isFirstHandle = userHandles.length === 0;
@@ -534,13 +535,15 @@ export function apply(ctx: Context, config: Config) {
           regionId,
           realmId,
           profileId,
-          isActive: isFirstHandle, // 如果是第一个句柄，设为活跃
+          isActive: isFirstHandle,
           createdAt: new Date()
         });
 
-        return `<quote id="${session.messageId}"/>✅ 您已成功绑定游戏句柄${isFirstHandle ? '并设为当前使用' : ''}。`;
+        const checkStatus = config.checkHandle ? '并已通过验证' : '（未验证句柄有效性）';
+        return `<quote id="${session.messageId}"/>✅ 您已成功绑定游戏句柄${isFirstHandle ? '并设为当前使用' : ''}${checkStatus}。`;
       } catch (error) {
-        if (error.response && error.response.status === 404) {
+        // 只有当开启检测时才检查404错误
+        if (config.checkHandle && error.response && error.response.status === 404) {
           return `<quote id="${session.messageId}"/>❌ 绑定失败, 您尝试绑定的游戏句柄不存在。`;
         }
         console.error('查询或绑定失败:', error);
