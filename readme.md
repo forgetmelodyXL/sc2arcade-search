@@ -18,6 +18,7 @@
 - ⚡ 支持代理服务器配置
 - 🔒 敏感词过滤功能
 - 🌐 区域服务器支持（US/EU/KR/CN）
+- 🔍 地图在线状态检测与推送通知
 
 ## 📦 安装
 
@@ -29,7 +30,12 @@ npm install koishi-plugin-sc2arcade-search
 
 ```ts
 proxyAgent: 'http://your-proxy-server:port' // 代理服务器地址（为空则不使用）
-sensitiveword: true //是否启用敏感词过滤功能，默认开启
+sensitiveword: true           // 是否启用敏感词过滤功能，默认开启
+checkHandle: true             // 是否开启绑定句柄检测，默认开启
+enableOtherFunctions: true    // 是否开启房间查询、战绩、排行榜等所有其他功能，默认开启
+mapMonitorEnabled: false      // 是否启用地图检测定时任务，默认关闭
+mapMonitorGroups: []          // 地图检测广播的群组ID列表
+mapMonitorMapIds: []          // 需要检测的地图ID列表
 ```
 
 ## 📋 命令列表
@@ -59,6 +65,11 @@ sensitiveword: true //是否启用敏感词过滤功能，默认开启
 | 绑定地图            | 3   | 绑定群组地图        |
 | 解绑地图            | 3   | 解除群组地图绑定        |
 | 更新日志            | -   | 查看群组地图更新历史        |
+
+### 🔍 地图检测
+| 命令                           | 功能描述                     |
+|------------------------------|----------------------------|
+| 地图检测            | 查询已配置地图的在线状态与详细信息 |
 
 ## 💻 使用示例
 
@@ -105,6 +116,11 @@ sensitiveword: true //是否启用敏感词过滤功能，默认开启
 ## 📃 更新日志
 <details>
 <summary>点我查看更新日志详情</summary>
+
+### ✨ 1.2.6
+  - 新增地图在线状态检测定时任务
+  - 新增 `/地图检测` 命令，查询已配置地图的详细信息
+  - 新增配置项：`mapMonitorEnabled`、`mapMonitorGroups`、`mapMonitorMapIds`
 
 ### ✨ 1.2.4
   - 新增一个配置项

@@ -9,6 +9,9 @@ export interface Config {
   sensitiveword: boolean
   checkHandle: boolean
   enableOtherFunctions: boolean  // 新增：是否开启其他所有功能
+  mapMonitorEnabled: boolean
+  mapMonitorGroups: string[]
+  mapMonitorMapIds: number[]
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -16,6 +19,9 @@ export const Config: Schema<Config> = Schema.object({
   sensitiveword: Schema.boolean().description('是否启用敏感词过滤功能').default(true),
   checkHandle: Schema.boolean().description('是否开启绑定句柄检测').default(true),
   enableOtherFunctions: Schema.boolean().description('是否开启房间查询、战绩、排行榜等所有其他功能').default(true),  // 新增配置项
+  mapMonitorEnabled: Schema.boolean().description('是否启用地图检测定时任务').default(false),
+  mapMonitorGroups: Schema.array(Schema.string()).description('地图检测广播的群组ID列表').default([]),
+  mapMonitorMapIds: Schema.array(Schema.number()).description('需要检测的地图ID列表').default([]),
 })
 
 export const inject = {
@@ -27,6 +33,7 @@ declare module 'koishi' {
     sc2arcade_player: player
     sc2arcade_map: map
     sc2arcade_sensitiveword: sensitiveName
+    sc2arcade_map_monitor: mapMonitorState
   }
 }
 
@@ -51,6 +58,12 @@ export interface sensitiveName {
   name: string
   isSensitive: boolean
   lastdate: Date
+}
+
+export interface mapMonitorState {
+  mapId: number
+  lastState: string
+  lastCheckedAt: Date
 }
 
 export function apply(ctx: Context, config: Config) {
@@ -91,6 +104,65 @@ export function apply(ctx: Context, config: Config) {
   }, {
     primary: 'name'
   })
+
+  ctx.model.extend('sc2arcade_map_monitor', {
+    mapId: 'unsigned',
+    lastState: 'text',
+    lastCheckedAt: 'timestamp',
+  }, {
+    primary: 'mapId'
+  })
+
+  // 地图检测定时任务
+  if (config.mapMonitorEnabled && config.mapMonitorGroups.length > 0 && config.mapMonitorMapIds.length > 0) {
+    ctx.setInterval(async () => {
+      try {
+        const response = await ctx.http.get('https://server.dreamprotocol.info:13085/mapmonitor/maps');
+        const maps: any[] = response.maps || [];
+
+        for (const mapId of config.mapMonitorMapIds) {
+          const mapData = maps.find((m: any) => m.mapId === mapId);
+          if (!mapData) continue;
+
+          const currentState = JSON.stringify(mapData);
+          const [previousRecord] = await ctx.database.get('sc2arcade_map_monitor', { mapId });
+
+          if (!previousRecord) {
+            // 首次运行，仅存储状态不广播
+            await ctx.database.create('sc2arcade_map_monitor', {
+              mapId,
+              lastState: currentState,
+              lastCheckedAt: new Date(),
+            });
+            continue;
+          }
+
+          if (previousRecord.lastState !== currentState) {
+            // 状态变化，广播通知
+            const message = formatMapMonitorMessage(mapData, previousRecord);
+
+            const bot = ctx.bots[0];
+            if (bot) {
+              for (const groupId of config.mapMonitorGroups) {
+                try {
+                  await bot.sendMessage(groupId, message);
+                } catch (e) {
+                  console.error(`发送地图检测消息到群组 ${groupId} 失败:`, e);
+                }
+              }
+            }
+
+            await ctx.database.set('sc2arcade_map_monitor', { mapId }, {
+              lastState: currentState,
+              lastCheckedAt: new Date(),
+            });
+          }
+        }
+      } catch (error) {
+        console.error('地图检测任务执行失败:', error);
+      }
+    }, 60000);
+  }
 
   function getRegionName(regionId: number): string {
     const regionMap = {
@@ -714,6 +786,64 @@ export function apply(ctx: Context, config: Config) {
         return '⚠️ 服务器繁忙, 请稍后尝试。';
       }
     });
+
+  // 地图检测查询 - 受 mapMonitorEnabled 控制
+  ctx.command('sc2arcade/地图检测', '查询已配置的地图详细信息')
+    .action(async (argv) => {
+      if (!config.mapMonitorEnabled || config.mapMonitorMapIds.length === 0) {
+        return `<quote id="${argv.session.messageId}"/>⚠️ 地图检测功能未开启或未配置地图ID。`;
+      }
+
+      try {
+        const response = await ctx.http.get('https://server.dreamprotocol.info:13085/mapmonitor/maps');
+        const maps: any[] = response.maps || [];
+
+        const targetMaps = maps.filter((m: any) => config.mapMonitorMapIds.includes(m.mapId));
+
+        if (targetMaps.length === 0) {
+          return `<quote id="${argv.session.messageId}"/>📭 未找到已配置的地图信息。`;
+        }
+
+        const fieldLabels: Record<string, string> = {
+          mapName: '地图名称',
+          isOnline: '在线状态',
+          popularityRank: '热度排名',
+          lastCheckTime: '最后检测时间',
+          lastStatusChangeTime: '最后状态变更时间',
+          firstSeenTime: '首次发现时间',
+          offlineCountLast24h: '24h内离线次数',
+          offlineCountLast30d: '30d内离线次数',
+          recentEvents: '近期事件',
+        };
+
+        const messages = targetMaps.map((mapData: any) => {
+          const lines: string[] = [];
+          lines.push('━━━━━━━━━━━━━━━━');
+          lines.push(`📋 ${mapData.mapName || '未知地图'} (ID: ${mapData.mapId})`);
+          for (const key of Object.keys(mapData)) {
+            if (key === 'mapId' || key === 'mapName') continue;
+            const value = mapData[key];
+            if (value !== null && value !== undefined && value !== '') {
+              const label = fieldLabels[key] || key;
+              const displayValue = Array.isArray(value) && value.length === 0
+                ? '无'
+                : typeof value === 'object'
+                  ? JSON.stringify(value)
+                  : key === 'isOnline'
+                    ? (value ? '🟢 在线' : '🔴 离线')
+                    : String(value);
+              lines.push(`  ${label}: ${displayValue}`);
+            }
+          }
+          return lines.join('\n');
+        });
+
+        return `<quote id="${argv.session.messageId}"/>${messages.join('\n')}`;
+      } catch (error) {
+        console.error('查询地图检测信息失败:', error);
+        return '⚠️ 服务器繁忙, 请稍后尝试。';
+      }
+    });
 }
 
 function profilesMatches(session: any, response: any) {
@@ -853,4 +983,49 @@ async function lobbiesHistory(ctx: Context, config: Config, response, status: st
   }));
 
   return roomMessages.join('\n\n');
+}
+
+function formatMapMonitorMessage(currentData: any, previousRecord: any): string {
+  const previousData = JSON.parse(previousRecord.lastState);
+
+  const lines: string[] = [];
+  lines.push('🔔 地图状态变更通知');
+
+  if (currentData.mapName) {
+    lines.push(`地图: ${currentData.mapName} (ID: ${currentData.mapId})`);
+  } else {
+    lines.push(`地图ID: ${currentData.mapId}`);
+  }
+
+  // 展示变更的字段
+  const fieldLabels: Record<string, string> = {
+    isOnline: '在线状态',
+    popularityRank: '热度排名',
+    lastCheckTime: '最后检测时间',
+    lastStatusChangeTime: '最后状态变更时间',
+    offlineCountLast24h: '24h内离线次数',
+    offlineCountLast30d: '30d内离线次数',
+    recentEvents: '近期事件',
+  };
+
+  for (const key of Object.keys(currentData)) {
+    if (key === 'mapId' || key === 'mapName') continue;
+    const prevValue = JSON.stringify(previousData[key]);
+    const currValue = JSON.stringify(currentData[key]);
+    if (prevValue !== currValue) {
+      const label = fieldLabels[key] || key;
+      const formatValue = (raw: string) => {
+        if (key === 'isOnline') {
+          try {
+            const parsed = JSON.parse(raw);
+            return typeof parsed === 'boolean' ? (parsed ? '🟢 在线' : '🔴 离线') : raw;
+          } catch { return raw; }
+        }
+        return raw;
+      };
+      lines.push(`${label}: ${formatValue(prevValue)} → ${formatValue(currValue)}`);
+    }
+  }
+
+  return lines.join('\n');
 }
