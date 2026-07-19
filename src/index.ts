@@ -137,8 +137,10 @@ export function apply(ctx: Context, config: Config) {
             continue;
           }
 
-          if (previousRecord.lastState !== currentState) {
-            // 状态变化，广播通知
+          const prevData = JSON.parse(previousRecord.lastState);
+
+          // 仅在线状态变化时才广播
+          if (prevData.isOnline !== mapData.isOnline) {
             const message = formatMapMonitorMessage(mapData, previousRecord);
 
             for (const groupId of config.mapMonitorGroups) {
@@ -156,12 +158,13 @@ export function apply(ctx: Context, config: Config) {
                 console.error(`发送地图检测消息到群组 ${groupId} 失败: 所有 bot 均无法发送`);
               }
             }
-
-            await ctx.database.set('sc2arcade_map_monitor', { mapId }, {
-              lastState: currentState,
-              lastCheckedAt: new Date(),
-            });
           }
+
+          // 始终更新存储状态
+          await ctx.database.set('sc2arcade_map_monitor', { mapId }, {
+            lastState: currentState,
+            lastCheckedAt: new Date(),
+          });
         }
       } catch (error) {
         console.error('地图检测任务执行失败:', error);
