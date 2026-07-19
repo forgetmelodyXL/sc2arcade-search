@@ -141,14 +141,19 @@ export function apply(ctx: Context, config: Config) {
             // 状态变化，广播通知
             const message = formatMapMonitorMessage(mapData, previousRecord);
 
-            const bot = ctx.bots[0];
-            if (bot) {
-              for (const groupId of config.mapMonitorGroups) {
+            for (const groupId of config.mapMonitorGroups) {
+              let sent = false;
+              for (const bot of ctx.bots) {
                 try {
                   await bot.sendMessage(groupId, message);
+                  sent = true;
+                  break;
                 } catch (e) {
-                  console.error(`发送地图检测消息到群组 ${groupId} 失败:`, e);
+                  // 此 bot 可能不在该群，尝试下一个
                 }
+              }
+              if (!sent) {
+                console.error(`发送地图检测消息到群组 ${groupId} 失败: 所有 bot 均无法发送`);
               }
             }
 
@@ -933,15 +938,20 @@ export function apply(ctx: Context, config: Config) {
           if (force && force.toLowerCase() === 'force') {
             if (config.mapMonitorGroups.length > 0) {
               const message = formatMapMonitorMessage(mapData, previousRecord || { lastState: '{}' });
-              const bot = ctx.bots[0];
-              if (bot) {
-                for (const groupId of config.mapMonitorGroups) {
+              for (const groupId of config.mapMonitorGroups) {
+                let sent = false;
+                for (const bot of ctx.bots) {
                   try {
                     await bot.sendMessage(groupId, message);
+                    sent = true;
                     lines.push(`  📤 已强制广播到群组: ${groupId}`);
+                    break;
                   } catch (e) {
-                    lines.push(`  ❌ 广播到群组 ${groupId} 失败: ${e}`);
+                    // 此 bot 可能不在该群，尝试下一个
                   }
+                }
+                if (!sent) {
+                  lines.push(`  ❌ 广播到群组 ${groupId} 失败: 所有 bot 均无法发送`);
                 }
               }
             } else {
