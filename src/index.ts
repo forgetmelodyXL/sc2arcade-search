@@ -816,6 +816,8 @@ export function apply(ctx: Context, config: Config) {
           recentEvents: '近期事件',
         };
 
+        const timeFields = ['lastCheckTime', 'lastStatusChangeTime', 'firstSeenTime'];
+
         const messages = targetMaps.map((mapData: any) => {
           const lines: string[] = [];
           lines.push('━━━━━━━━━━━━━━━━');
@@ -825,13 +827,18 @@ export function apply(ctx: Context, config: Config) {
             const value = mapData[key];
             if (value !== null && value !== undefined && value !== '') {
               const label = fieldLabels[key] || key;
-              const displayValue = Array.isArray(value) && value.length === 0
-                ? '无'
-                : typeof value === 'object'
-                  ? JSON.stringify(value)
-                  : key === 'isOnline'
-                    ? (value ? '🟢 在线' : '🔴 离线')
-                    : String(value);
+              let displayValue: string;
+              if (key === 'isOnline') {
+                displayValue = value ? '🟢 在线' : '🔴 离线';
+              } else if (key === 'recentEvents') {
+                displayValue = formatRecentEvents(value);
+              } else if (timeFields.includes(key)) {
+                displayValue = toBeijingTime(value);
+              } else if (typeof value === 'object') {
+                displayValue = JSON.stringify(value);
+              } else {
+                displayValue = String(value);
+              }
               lines.push(`  ${label}: ${displayValue}`);
             }
           }
@@ -841,6 +848,113 @@ export function apply(ctx: Context, config: Config) {
         return `<quote id="${argv.session.messageId}"/>${messages.join('\n')}`;
       } catch (error) {
         console.error('查询地图检测信息失败:', error);
+        return '⚠️ 服务器繁忙, 请稍后尝试。';
+      }
+    });
+
+  // 地图检测调试指令 - 受 mapMonitorEnabled 控制
+  ctx.command('sc2arcade/地图检测调试 [force]', '调试地图检测定时任务，查看API数据与存储状态的对比', { authority: 3 })
+    .action(async (argv, force) => {
+      if (!config.mapMonitorEnabled || config.mapMonitorMapIds.length === 0) {
+        return `<quote id="${argv.session.messageId}"/>⚠️ 地图检测功能未开启或未配置地图ID。`;
+      }
+
+      try {
+        const response = await ctx.http.get('https://server.dreamprotocol.info:13085/mapmonitor/maps');
+        const maps: any[] = response.maps || [];
+
+        const lines: string[] = [];
+        lines.push('🔧 地图检测调试信息');
+        lines.push(`API 数据生成时间: ${toBeijingTime(response.generatedAt)}`);
+        lines.push('');
+
+        for (const mapId of config.mapMonitorMapIds) {
+          const mapData = maps.find((m: any) => m.mapId === mapId);
+          lines.push(`━━━ 地图ID: ${mapId} ━━━`);
+
+          if (!mapData) {
+            lines.push('  ❌ API 中未找到此地图');
+            lines.push('');
+            continue;
+          }
+
+          const [previousRecord] = await ctx.database.get('sc2arcade_map_monitor', { mapId });
+          const currentState = JSON.stringify(mapData);
+
+          // 当前 API 数据
+          lines.push('  📡 当前 API 数据:');
+          lines.push(`    在线状态: ${mapData.isOnline ? '🟢 在线' : '🔴 离线'}`);
+          lines.push(`    热度排名: ${mapData.popularityRank}`);
+          lines.push(`    最后检测: ${toBeijingTime(mapData.lastCheckTime)}`);
+          lines.push(`    状态变更: ${toBeijingTime(mapData.lastStatusChangeTime)}`);
+          lines.push(`    24h离线: ${mapData.offlineCountLast24h} 次`);
+          lines.push(`    近期事件: ${formatRecentEvents(mapData.recentEvents)}`);
+
+          // 存储的旧数据
+          if (previousRecord) {
+            const prevData = JSON.parse(previousRecord.lastState);
+            lines.push('');
+            lines.push('  💾 存储的旧数据:');
+            lines.push(`    在线状态: ${prevData.isOnline ? '🟢 在线' : '🔴 离线'}`);
+            lines.push(`    热度排名: ${prevData.popularityRank}`);
+            lines.push(`    最后检测: ${toBeijingTime(prevData.lastCheckTime)}`);
+            lines.push(`    状态变更: ${toBeijingTime(prevData.lastStatusChangeTime)}`);
+            lines.push(`    24h离线: ${prevData.offlineCountLast24h} 次`);
+            lines.push(`    存储时间: ${toBeijingTime(previousRecord.lastCheckedAt.toISOString())}`);
+
+            // 差异对比
+            if (previousRecord.lastState !== currentState) {
+              lines.push('');
+              lines.push('  ⚡ 检测到变化，将会触发广播:');
+              const changedFields: string[] = [];
+              for (const key of Object.keys(mapData)) {
+                if (key === 'mapId' || key === 'mapName' || key === 'generatedAt') continue;
+                if (JSON.stringify(prevData[key]) !== JSON.stringify(mapData[key])) {
+                  const fieldLabels: Record<string, string> = {
+                    isOnline: '在线状态', popularityRank: '热度排名',
+                    lastCheckTime: '最后检测', lastStatusChangeTime: '状态变更',
+                    offlineCountLast24h: '24h离线', offlineCountLast30d: '30d离线',
+                    recentEvents: '近期事件', firstSeenTime: '首次发现',
+                  };
+                  changedFields.push(fieldLabels[key] || key);
+                }
+              }
+              lines.push(`    变化字段: ${changedFields.join(', ')}`);
+            } else {
+              lines.push('');
+              lines.push('  ✅ 无变化，不会触发广播');
+            }
+          } else {
+            lines.push('');
+            lines.push('  💾 存储的旧数据: 无（首次运行会先存储不广播）');
+          }
+
+          // 强制广播
+          if (force && force.toLowerCase() === 'force') {
+            if (config.mapMonitorGroups.length > 0) {
+              const message = formatMapMonitorMessage(mapData, previousRecord || { lastState: '{}' });
+              const bot = ctx.bots[0];
+              if (bot) {
+                for (const groupId of config.mapMonitorGroups) {
+                  try {
+                    await bot.sendMessage(groupId, message);
+                    lines.push(`  📤 已强制广播到群组: ${groupId}`);
+                  } catch (e) {
+                    lines.push(`  ❌ 广播到群组 ${groupId} 失败: ${e}`);
+                  }
+                }
+              }
+            } else {
+              lines.push('  ⚠️ 未配置广播群组，无法发送');
+            }
+          }
+
+          lines.push('');
+        }
+
+        return `<quote id="${argv.session.messageId}"/>${lines.join('\n')}`;
+      } catch (error) {
+        console.error('地图检测调试失败:', error);
         return '⚠️ 服务器繁忙, 请稍后尝试。';
       }
     });
@@ -886,6 +1000,35 @@ function convertDateTimeFormat(dateString) {
   const date = new Date(dateString);
   const pad = n => String(n).padStart(2, '0');
   return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function toBeijingTime(isoString: string): string {
+  const date = new Date(isoString);
+  const beijingTime = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = beijingTime.getUTCFullYear();
+  const M = pad(beijingTime.getUTCMonth() + 1);
+  const d = pad(beijingTime.getUTCDate());
+  const h = pad(beijingTime.getUTCHours());
+  const m = pad(beijingTime.getUTCMinutes());
+  const s = pad(beijingTime.getUTCSeconds());
+  return `${y}/${M}/${d} ${h}:${m}:${s}`;
+}
+
+function translateEventType(eventType: string): string {
+  const translations: Record<string, string> = {
+    cameBackOnline: '恢复在线',
+    wentOffline: '离线',
+  };
+  return translations[eventType] || eventType;
+}
+
+function formatRecentEvents(events: any[]): string {
+  if (!events || events.length === 0) return '无';
+  const latest5 = events.slice(0, 5);
+  return latest5.map((e: any) =>
+    `${translateEventType(e.eventType)} (${toBeijingTime(e.eventTime)})`
+  ).join(', ');
 }
 
 function mapsplayerbase(response) {
@@ -997,7 +1140,6 @@ function formatMapMonitorMessage(currentData: any, previousRecord: any): string 
     lines.push(`地图ID: ${currentData.mapId}`);
   }
 
-  // 展示变更的字段
   const fieldLabels: Record<string, string> = {
     isOnline: '在线状态',
     popularityRank: '热度排名',
@@ -1008,22 +1150,36 @@ function formatMapMonitorMessage(currentData: any, previousRecord: any): string 
     recentEvents: '近期事件',
   };
 
+  const timeFields = ['lastCheckTime', 'lastStatusChangeTime', 'firstSeenTime'];
+
+  const formatValue = (key: string, raw: string): string => {
+    if (key === 'isOnline') {
+      try {
+        const parsed = JSON.parse(raw);
+        return typeof parsed === 'boolean' ? (parsed ? '🟢 在线' : '🔴 离线') : raw;
+      } catch { return raw; }
+    }
+    if (key === 'recentEvents') {
+      try {
+        const events = JSON.parse(raw);
+        return formatRecentEvents(events);
+      } catch { return raw; }
+    }
+    if (timeFields.includes(key)) {
+      try {
+        return toBeijingTime(JSON.parse(raw));
+      } catch { return raw; }
+    }
+    return raw;
+  };
+
   for (const key of Object.keys(currentData)) {
-    if (key === 'mapId' || key === 'mapName') continue;
+    if (key === 'mapId' || key === 'mapName' || key === 'recentEvents') continue;
     const prevValue = JSON.stringify(previousData[key]);
     const currValue = JSON.stringify(currentData[key]);
     if (prevValue !== currValue) {
       const label = fieldLabels[key] || key;
-      const formatValue = (raw: string) => {
-        if (key === 'isOnline') {
-          try {
-            const parsed = JSON.parse(raw);
-            return typeof parsed === 'boolean' ? (parsed ? '🟢 在线' : '🔴 离线') : raw;
-          } catch { return raw; }
-        }
-        return raw;
-      };
-      lines.push(`${label}: ${formatValue(prevValue)} → ${formatValue(currValue)}`);
+      lines.push(`${label}: ${formatValue(key, prevValue)} → ${formatValue(key, currValue)}`);
     }
   }
 
