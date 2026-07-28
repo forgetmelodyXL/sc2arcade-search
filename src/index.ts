@@ -1155,13 +1155,13 @@ function formatMapMonitorMessage(currentData: any, previousRecord: any): string 
 
   const fieldLabels: Record<string, string> = {
     isOnline: '在线状态',
-    popularityRank: '热度排名',
-    lastCheckTime: '最后检测时间',
     lastStatusChangeTime: '最后状态变更时间',
     offlineCountLast24h: '24h内离线次数',
     offlineCountLast30d: '30d内离线次数',
-    recentEvents: '近期事件',
   };
+
+  // 这些字段只显示新值，不显示旧值
+  const newValueOnlyFields = ['lastStatusChangeTime', 'offlineCountLast24h', 'offlineCountLast30d'];
 
   const timeFields = ['lastCheckTime', 'lastStatusChangeTime', 'firstSeenTime'];
 
@@ -1187,12 +1187,16 @@ function formatMapMonitorMessage(currentData: any, previousRecord: any): string 
   };
 
   for (const key of Object.keys(currentData)) {
-    if (key === 'mapId' || key === 'mapName' || key === 'recentEvents') continue;
+    if (key === 'mapId' || key === 'mapName' || key === 'recentEvents' || key === 'popularityRank' || key === 'lastCheckTime') continue;
     const prevValue = JSON.stringify(previousData[key]);
     const currValue = JSON.stringify(currentData[key]);
     if (prevValue !== currValue) {
       const label = fieldLabels[key] || key;
-      lines.push(`${label}: ${formatValue(key, prevValue)} → ${formatValue(key, currValue)}`);
+      if (newValueOnlyFields.includes(key)) {
+        lines.push(`${label}: ${formatValue(key, currValue)}`);
+      } else {
+        lines.push(`${label}: ${formatValue(key, prevValue)} → ${formatValue(key, currValue)}`);
+      }
     }
   }
 
