@@ -815,7 +815,6 @@ export function apply(ctx: Context, config: Config) {
         const fieldLabels: Record<string, string> = {
           mapName: '地图名称',
           isOnline: '在线状态',
-          popularityRank: '热度排名',
           lastStatusChangeTime: '最后状态变更时间',
           offlineCountLast24h: '24h内离线次数',
           offlineCountLast30d: '30d内离线次数',
@@ -830,8 +829,7 @@ export function apply(ctx: Context, config: Config) {
           lines.push(`📋 ${mapData.mapName || '未知地图'} (ID: ${mapData.mapId})`);
           for (const key of Object.keys(mapData)) {
             if (key === 'mapId' || key === 'mapName') continue;
-            if (key === 'lastCheckTime' || key === 'firstSeenTime') continue;
-            if (key === 'popularityRank' && !mapData.isOnline) continue;
+            if (key === 'lastCheckTime' || key === 'firstSeenTime' || key === 'popularityRank') continue;
             const value = mapData[key];
             if (value !== null && value !== undefined && value !== '') {
               const label = fieldLabels[key] || key;
